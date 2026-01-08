@@ -5,6 +5,10 @@ import random
 import numpy as np
 
 from src.utils.constants import RegressorName
+from src.utils.data_class import OptimConfig
+import torch
+import torch.nn as nn
+import inspect
 
 
 def get_activation(name: str) -> nn.Module:
@@ -47,42 +51,76 @@ def get_device() -> torch.device:
     return torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 
-def build_regressor(name: RegressorName, params: Dict[str, Any]):
+def _filter_kwargs_for_ctor(ctor, params: Dict[str, Any]) -> Dict[str, Any]:
+    if params is None:
+        return {}
+    sig = inspect.signature(ctor)
+    accepted = set(sig.parameters.keys())
+    accepted.discard("self")
+
+    # If ctor accepts **kwargs, pass everything through
+    if any(p.kind == inspect.Parameter.VAR_KEYWORD for p in sig.parameters.values()):
+        return dict(params)
+
+    # Otherwise drop unknown keys
+    return {k: v for k, v in params.items() if k in accepted}
+
+
+def build_regressor(name: RegressorName, params: Dict[str, Any]) -> Any:
     name = name.lower()
+    params = {} if params is None else dict(params)
 
     if name == "linear":
         from sklearn.linear_model import LinearRegression
 
-        return LinearRegression(**params)
+        ctor = LinearRegression
 
-    if name == "ridge":
+    elif name == "ridge":
         from sklearn.linear_model import Ridge
 
-        return Ridge(**params)
+        ctor = Ridge
 
-    if name == "lasso":
+    elif name == "lasso":
         from sklearn.linear_model import Lasso
 
-        return Lasso(**params)
+        ctor = Lasso
 
-    if name == "elasticnet":
+    elif name == "elasticnet":
         from sklearn.linear_model import ElasticNet
 
-        return ElasticNet(**params)
+        ctor = ElasticNet
 
-    if name == "random_forest":
+    elif name == "random_forest":
         from sklearn.ensemble import RandomForestRegressor
 
-        return RandomForestRegressor(**params)
+        ctor = RandomForestRegressor
 
-    if name == "extra_trees":
+    elif name == "extra_trees":
         from sklearn.ensemble import ExtraTreesRegressor
 
-        return ExtraTreesRegressor(**params)
+        ctor = ExtraTreesRegressor
 
-    if name == "xgboost":
+    elif name == "xgboost":
         from xgboost import XGBRegressor
 
-        return XGBRegressor(**params)
+        ctor = XGBRegressor
 
-    raise ValueError(f"Unknown regressor_name: {name}")
+    else:
+        raise ValueError(f"Unknown regressor_name: {name}")
+
+    used = _filter_kwargs_for_ctor(ctor, params)
+    return ctor(**used)
+
+
+def configure_optimizer(cfg: OptimConfig, model: nn.Module) -> torch.optim.Optimizer:
+    name = cfg.name.lower()
+    lr = float(cfg.lr)
+    wd = float(cfg.weight_decay)
+
+    if name == "adam":
+        return torch.optim.Adam(model.parameters(), lr=lr, weight_decay=wd)
+    if name == "adamw":
+        return torch.optim.AdamW(model.parameters(), lr=lr, weight_decay=wd)
+    if name == "sgd":
+        return torch.optim.SGD(model.parameters(), lr=lr, weight_decay=wd, momentum=0.9)
+    raise ValueError(f"Unknown optimizer: {cfg.name}")

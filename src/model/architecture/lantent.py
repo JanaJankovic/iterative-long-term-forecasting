@@ -25,7 +25,7 @@ def iterative_forecast_latent_1step(
     return np.vstack(out)
 
 
-class TabularLatentForecastPipeline:
+class TabularLatent:
     """
     Pipeline pieces:
       1) TabularAutoencoder (PyTorch) to compress X_t -> z_t and decode z -> X_hat

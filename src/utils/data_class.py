@@ -1,15 +1,27 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Any, Dict, Optional
+from typing import Any, Dict, Optional, Tuple
 
 import numpy as np
 from src.utils.constants import (
     RegressorName,
-    EncoderType,
-    DecoderType,
-    LatentFeatureMode,
 )
+
+
+@dataclass
+class DataConfig:
+    csv_path: str
+    target_col: str
+    datetime_col: str
+    batch_size: int
+    split_ratio: Tuple[float, float, float]
+    lags: Tuple[int, ...] = (1, 2, 7, 14, 30)
+    rolling_windows: Tuple[int, ...] = (3, 7)
+    datetime_col: str
+    horizon: int = 1
+    lookback: int = 7
+    stride: int = 1
 
 
 @dataclass
@@ -17,54 +29,6 @@ class OptimConfig:
     name: str = "adamw"  # "adam" | "adamw" | "sgd"
     lr: float = 1e-3
     weight_decay: float = 0.0
-
-
-@dataclass
-class ModelConfig:
-    # Data
-    d_in: int
-    latent_dim: int
-    horizon: int
-
-    # Structured latent
-    variational: bool = True
-    beta_kl: float = 1e-3
-
-    # Encoder / Decoder selection
-    encoder_type: EncoderType = "rnn"
-    decoder_type: DecoderType = "mlp"
-
-    # MLP params
-    mlp_hidden: int = 128
-    mlp_layers: int = 2
-    activation: str = "relu"
-    mlp_dropout: float = 0.0
-
-    # RNN params
-    rnn_hidden: int = 128
-    rnn_layers: int = 2
-    rnn_type: str = "gru"
-    rnn_dropout: float = 0.0
-    encoder_bidirectional: bool = False
-
-    # Latent regressor config (the "simple predictor")
-    regressor_name: RegressorName = "ridge"
-    regressor_params: Dict[str, Any] = field(default_factory=dict)
-    latent_feature_mode: LatentFeatureMode = "last"  # how z_past -> features
-
-    # Torch optimizer (for encoder+decoder training only)
-    optim: OptimConfig = OptimConfig()
-
-
-@dataclass
-class IterForecastResult:
-    # scaled space
-    seed_x_scaled: np.ndarray  # (T, 1)
-    y_pred_scaled: np.ndarray  # (S, 1)
-
-    # original space (if scaler provided)
-    seed_x: Optional[np.ndarray]  # (T, 1)
-    y_pred: Optional[np.ndarray]  # (S, 1)
 
 
 @dataclass
@@ -80,3 +44,29 @@ class LatentForecasterConfig:
                 random_state=42,
                 n_jobs=-1,
             )
+
+
+@dataclass
+class ModelConfig:
+    # Data
+    latent_dim: int
+    horizon: int
+    latent_cfg: LatentForecasterConfig = LatentForecasterConfig()
+    optim: OptimConfig = OptimConfig()
+
+    variational: bool = True
+    beta_kl: float = 1e-3
+
+    hidden: int = 128
+    layers: int = 2
+    activation: str = "relu"
+    dropout: float = 0.0
+    encoder_bidirectional: bool = False
+
+
+@dataclass
+class TrainConfig:
+    epochs_ae: int = 30
+    loss_fn: str = "mse"  # "mse" or "mae" depending on your model implementation
+    grad_clip: Optional[float] = 1.0
+    early_stop_patience: int = 7

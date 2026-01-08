@@ -1,7 +1,8 @@
+import json
 import numpy as np
 import torch
 
-from typing import Tuple
+from typing import Any, Tuple
 from torch.utils.data import DataLoader
 from src.utils.constants import LatentFeatureMode
 
@@ -49,3 +50,7 @@ def collect_tensors_from_loader(
         xs.append(x.to(device))
         ys.append(y.to(device).unsqueeze(-1))
     return torch.cat(xs, dim=0), torch.cat(ys, dim=0)
+
+
+def json_dumps(obj: Any) -> str:
+    return json.dumps(obj, indent=2, default=str)
