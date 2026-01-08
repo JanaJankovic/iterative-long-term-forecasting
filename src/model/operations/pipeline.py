@@ -17,6 +17,7 @@ from src.model.architecture.lantent import TabularLatent
 from src.model.operations.evaluate import compute_metrics
 from src.utils.data_utils import json_dumps
 import numpy as np
+import datetime
 
 
 def tabular_latent_pipeline(
@@ -66,7 +67,8 @@ def tabular_latent_pipeline(
     # joblib.dump(scaler, base.with_suffix(".scaler.pkl"))
     # latent forecaster (sklearn)
     # joblib.dump(latent_regressor.forecaster, base.with_suffix(".latent.pkl"))
-
+    tz = datetime.timezone.utc
+    dt = datetime.datetime.now(tz=tz).strftime("%Y%m%d%H%M%S")
     report = {
         "data_cfg": (
             asdict(data_cfg)
@@ -88,11 +90,12 @@ def tabular_latent_pipeline(
         "X_all": np.array(meta["X_all"][:, 0]).tolist(),
         "y_pred": y_pred.tolist(),
     }
-    (Path(out_dir) / "reports" / f"{model_tag}.json").write_text(
+    (Path(out_dir) / "reports" / f"{dt}_{model_tag}.json").write_text(
         json_dumps(report), encoding="utf-8"
     )
 
     return {
+        "name": f"{dt}_{model_tag}",
         "n_train": n_train,
         "effective_horizon": data_cfg.horizon,
         "X_all": meta["X_all"],

@@ -109,11 +109,12 @@ def random_search_tabular_latent(
         score = float(metrics[metric_key])
         trial = {
             "trial": i,
+            "name": res["name"],
             "seed": s,
             "score": score,
             "metrics": metrics,
-            "sampled": sampled,
-            "artifacts_base": res.get("artifacts_base"),
+            "X_all": np.array(res["X_all"][:, 0]).tolist(),
+            "y_pred": res["y_pred"].tolist(),
         }
         trials.append(trial)
 
