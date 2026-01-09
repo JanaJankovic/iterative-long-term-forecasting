@@ -22,6 +22,9 @@ class DataConfig:
     horizon: int = 1
     lookback: int = 7
     stride: int = 1
+    calendar_cols = ["dayofweek", "month", "dayofyear"]
+    nominal_cols = ["is_weekend"]
+    numeric_cols = ["lag", "roll_mean_"]
 
 
 @dataclass

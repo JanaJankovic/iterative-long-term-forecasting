@@ -1,8 +1,10 @@
 import json
 import numpy as np
+from sklearn.preprocessing import MinMaxScaler, OneHotEncoder
 import torch
+import pandas as pd
 
-from typing import Any, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 from torch.utils.data import DataLoader
 from src.utils.constants import LatentFeatureMode
 
@@ -54,3 +56,130 @@ def collect_tensors_from_loader(
 
 def json_dumps(obj: Any) -> str:
     return json.dumps(obj, indent=2, default=str)
+
+
+def cyclic_encode_calendar_features(
+    df: pd.DataFrame,
+    calendar_cols: List[str],
+    *,
+    drop_original: bool = True,
+) -> pd.DataFrame:
+    """
+    For each calendar col, infer period as (max-min+1) if it matches a common cycle,
+    then add <col>_sin/<col>_cos and optionally drop the original col.
+    """
+    out = df.copy()
+    common = {7, 12, 24, 60, 365, 366, 52, 53}
+
+    for col in calendar_cols:
+        s = out[col].astype(float).to_numpy()
+        mn, mx = np.nanmin(s), np.nanmax(s)
+        P = int(round(mx - mn + 1))
+        if P not in common:
+            raise ValueError(
+                f"Cannot infer cycle for '{col}' (min={mn}, max={mx}, span={P})."
+            )
+
+        k = s - (0.0 if mn == 0.0 else 1.0 if mn == 1.0 else mn)
+        a = 2.0 * np.pi * (k / float(P))
+        out[f"{col}_sin"] = np.sin(a).astype(np.float32)
+        out[f"{col}_cos"] = np.cos(a).astype(np.float32)
+
+        if drop_original:
+            out = out.drop(columns=[col])
+
+    return out
+
+
+def split_scale_encode_df(
+    df: pd.DataFrame,
+    *,
+    calendar_cols: List[str],
+    nominal_cols: List[str],
+    numeric_cols: List[str],
+    y_col: str,
+    split_ratio: Tuple[float, float, float] = (0.7, 0.15, 0.15),
+    numeric_scaler=None,  # e.g., MinMaxScaler() or StandardScaler()
+    y_scaler=None,  # if None -> use numeric_scaler
+    onehot: Optional[OneHotEncoder] = None,
+    drop_original_calendar: bool = True,
+) -> Tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame, Dict[str, object]]:
+    """
+    - calendar_cols: cyclic sin/cos encoding
+    - nominal_cols: one-hot encoded (fit on train, transform val/test)
+    - numeric_cols: scaled (fit on train only)
+    - y_col: scaled with y_scaler if provided; else uses numeric_scaler
+    """
+    df = cyclic_encode_calendar_features(
+        df, calendar_cols, drop_original=drop_original_calendar
+    )
+    df = df.copy()
+
+    n = len(df)
+    n_train = int(n * split_ratio[0])
+    n_val_end = n_train + int(n * split_ratio[1])
+
+    train = df.iloc[:n_train].copy()
+    val = df.iloc[n_train:n_val_end].copy()
+    test = df.iloc[n_val_end:].copy()
+
+    if numeric_scaler is None:
+        numeric_scaler = MinMaxScaler()
+    if onehot is None:
+        onehot = OneHotEncoder(handle_unknown="ignore", sparse_output=False)
+
+    used_y_scaler = y_scaler if y_scaler is not None else numeric_scaler
+
+    # --- One-hot nominal ---
+    if nominal_cols:
+        # make sure the encoder does not crash on unseen categories
+        if getattr(onehot, "handle_unknown", None) != "ignore":
+            onehot.set_params(handle_unknown="ignore")
+
+        onehot.fit(train[nominal_cols])
+
+        tr_mat = onehot.transform(train[nominal_cols])
+        va_mat = onehot.transform(val[nominal_cols])
+        te_mat = onehot.transform(test[nominal_cols])
+
+        # FIX: densify (works for scipy sparse)
+        if hasattr(tr_mat, "toarray"):
+            tr_mat = tr_mat.toarray()
+            va_mat = va_mat.toarray()
+            te_mat = te_mat.toarray()
+
+        oh_cols = onehot.get_feature_names_out(nominal_cols)
+
+        tr_oh = pd.DataFrame(tr_mat, index=train.index, columns=oh_cols)
+        va_oh = pd.DataFrame(va_mat, index=val.index, columns=oh_cols)
+        te_oh = pd.DataFrame(te_mat, index=test.index, columns=oh_cols)
+
+        train = pd.concat([train.drop(columns=nominal_cols), tr_oh], axis=1)
+        val = pd.concat([val.drop(columns=nominal_cols), va_oh], axis=1)
+        test = pd.concat([test.drop(columns=nominal_cols), te_oh], axis=1)
+
+    # --- Scale numeric (excluding y if present) ---
+    num_cols_no_y = [
+        c
+        for c in df.columns
+        if c != y_col and any(c.startswith(base) for base in numeric_cols)
+    ]
+    if num_cols_no_y:
+        numeric_scaler.fit(train[num_cols_no_y])
+        train.loc[:, num_cols_no_y] = numeric_scaler.transform(train[num_cols_no_y])
+        val.loc[:, num_cols_no_y] = numeric_scaler.transform(val[num_cols_no_y])
+        test.loc[:, num_cols_no_y] = numeric_scaler.transform(test[num_cols_no_y])
+
+    # --- Scale y separately (or reuse numeric_scaler) ---
+    if y_col:
+        used_y_scaler.fit(train[[y_col]])
+        train.loc[:, [y_col]] = used_y_scaler.transform(train[[y_col]])
+        val.loc[:, [y_col]] = used_y_scaler.transform(val[[y_col]])
+        test.loc[:, [y_col]] = used_y_scaler.transform(test[[y_col]])
+
+    scalers = {
+        "numeric_scaler": numeric_scaler,
+        "y_scaler": used_y_scaler,
+        "onehot": onehot,
+    }
+    return train, val, test, scalers

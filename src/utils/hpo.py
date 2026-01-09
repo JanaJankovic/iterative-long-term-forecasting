@@ -1,5 +1,8 @@
 from src.utils.data_class import ModelConfig, TrainConfig, DataConfig
-from src.model.operations.pipeline import tabular_latent_pipeline
+from src.model.operations.pipeline import (
+    latent_readout_pipeline,
+    latent_transition_pipeline,
+)
 from dataclasses import replace
 from typing import Any, Dict, List, Optional
 import numpy as np
@@ -17,6 +20,7 @@ def random_search_tabular_latent(
     metric_key: str = "rmse",  # must exist in metrics dict
     minimize: bool = True,
     verbose: bool = False,
+    transitional: bool = True,
 ) -> Dict[str, Any]:
     """
     Random-search HPO wrapper around tabular_latent_pipeline.
@@ -96,10 +100,17 @@ def random_search_tabular_latent(
                     else:
                         raise KeyError(f"Unknown hyperparameter key: {k}")
 
-        # run
-        res = tabular_latent_pipeline(
-            dcfg, mcfg, tcfg, device=device, out_dir=out_dir, verbose=verbose
-        )
+        if transitional:
+            # run
+            res = latent_transition_pipeline(
+                dcfg, mcfg, tcfg, device=device, out_dir=out_dir, verbose=verbose
+            )
+            X_all = res["X_all"][:, 0]
+        else:
+            res = latent_readout_pipeline(
+                dcfg, mcfg, tcfg, device=device, out_dir=out_dir, verbose=verbose
+            )
+            X_all = res["X_all"]
         metrics = res["metrics"]
         if metric_key not in metrics:
             raise KeyError(
@@ -113,7 +124,7 @@ def random_search_tabular_latent(
             "seed": s,
             "score": score,
             "metrics": metrics,
-            "X_all": np.array(res["X_all"][:, 0]).tolist(),
+            "X_all": np.array(X_all).tolist(),
             "y_pred": res["y_pred"].tolist(),
         }
         trials.append(trial)

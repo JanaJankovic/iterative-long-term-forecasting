@@ -3,11 +3,12 @@ import pandas as pd
 import numpy as np
 
 
-from sklearn.preprocessing import MinMaxScaler
+from sklearn.preprocessing import MinMaxScaler, OneHotEncoder
 import torch
 from torch.utils.data import DataLoader, TensorDataset
 
 from src.utils.data_class import DataConfig
+from src.utils.data_utils import split_scale_encode_df
 
 
 def build_sequence(data, lookback, horizon, stride=1):
@@ -102,7 +103,7 @@ def create_features_from_series(
     return df
 
 
-def process_tabular(data_cfg: DataConfig):
+def process_tabular_transition(data_cfg: DataConfig):
     """
     Builds tabular features + MinMax scaling + AE loaders.
 
@@ -185,3 +186,105 @@ def process_tabular(data_cfg: DataConfig):
     }
 
     return (train_loader, val_loader, test_loader), scaler, input_shape, meta
+
+
+def process_tabular_readout(data_cfg: DataConfig):
+    """
+    Feature engineering -> cyclic calendar encoding + onehot + scaling (via split_scale_encode_df)
+    -> AE DataLoaders that yield (x, x) where x excludes y_col.
+
+    Returns:
+      loaders: (train_loader, val_loader, test_loader) yielding (x, x) with x shape (B, F_in)
+      input_shape: int (F_in)
+      meta: dict with:
+        - n_train
+        - n_val_end
+        - idx_all (engineered index)
+        - train_end_ts (timestamp of last train engineered row)
+        - y_all_unscaled (engineered y, unscaled)
+        - y_train/y_val/y_test (scaled y from split dfs)
+        - scalers
+        - feature_names_in
+    """
+    df_raw = pd.read_csv(data_cfg.csv_path)
+
+    dt = pd.to_datetime(df_raw[data_cfg.datetime_col], errors="coerce")
+    m = dt.notna()
+    df_raw = df_raw.loc[m].copy()
+    dt = dt.loc[m]
+
+    series = pd.Series(
+        df_raw[data_cfg.target_col].astype(float).to_numpy(),
+        index=dt,
+        name="y",
+    ).sort_index()
+
+    features_df = create_features_from_series(
+        series, lags=data_cfg.lags, rolling_windows=data_cfg.rolling_windows
+    )
+
+    y_col = getattr(data_cfg, "y_col", "y")
+    idx_all = features_df.index
+    y_all_unscaled = features_df[y_col].to_numpy(dtype=np.float32)
+
+    calendar_cols = getattr(data_cfg, "calendar_cols", [])
+    nominal_cols = getattr(data_cfg, "nominal_cols", [])
+
+    numeric_cols = getattr(data_cfg, "numeric_cols", None)
+    if numeric_cols is None:
+        exclude = set([y_col]) | set(calendar_cols) | set(nominal_cols)
+        numeric_cols = [c for c in features_df.columns if c not in exclude]
+
+    train_df, val_df, test_df, scalers = split_scale_encode_df(
+        features_df,
+        calendar_cols=calendar_cols,
+        nominal_cols=nominal_cols,
+        numeric_cols=numeric_cols + ([y_col] if y_col not in numeric_cols else []),
+        y_col=y_col,
+        split_ratio=tuple(map(float, data_cfg.split_ratio)),
+        numeric_scaler=MinMaxScaler(),
+        y_scaler=MinMaxScaler(),
+        onehot=OneHotEncoder(handle_unknown="ignore"),
+        drop_original_calendar=True,
+    )
+
+    feature_names_in = [c for c in train_df.columns if c != y_col]
+
+    x_train = train_df[feature_names_in].to_numpy(dtype=np.float32)
+    x_val = val_df[feature_names_in].to_numpy(dtype=np.float32)
+    x_test = test_df[feature_names_in].to_numpy(dtype=np.float32)
+
+    xtr = torch.tensor(x_train, dtype=torch.float32)
+    xva = torch.tensor(x_val, dtype=torch.float32)
+    xte = torch.tensor(x_test, dtype=torch.float32)
+
+    train_loader = DataLoader(
+        TensorDataset(xtr, xtr), batch_size=data_cfg.batch_size, shuffle=False
+    )
+    val_loader = DataLoader(
+        TensorDataset(xva, xva), batch_size=data_cfg.batch_size, shuffle=False
+    )
+    test_loader = DataLoader(
+        TensorDataset(xte, xte), batch_size=data_cfg.batch_size, shuffle=False
+    )
+
+    input_shape = int(xtr.shape[1])
+
+    n_train = len(train_df)
+    n_val_end = n_train + len(val_df)
+    train_end_ts = idx_all[n_train - 1]
+
+    meta = {
+        "idx_all": idx_all,
+        "n_train": n_train,
+        "n_val_end": n_val_end,
+        "train_end_ts": train_end_ts,
+        "y_all_unscaled": y_all_unscaled,
+        "y_train": train_df[y_col],
+        "y_val": val_df[y_col],
+        "y_test": test_df[y_col],
+        "scalers": scalers,
+        "feature_names_in": feature_names_in,
+    }
+
+    return (train_loader, val_loader, test_loader), input_shape, meta
