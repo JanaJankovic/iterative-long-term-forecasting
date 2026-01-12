@@ -64,24 +64,32 @@ def cyclic_encode_calendar_features(
     *,
     drop_original: bool = True,
 ) -> pd.DataFrame:
-    """
-    For each calendar col, infer period as (max-min+1) if it matches a common cycle,
-    then add <col>_sin/<col>_cos and optionally drop the original col.
-    """
+    cycle_map = {
+        "dayofweek": (7, 0.0),
+        "dow": (7, 0.0),
+        "weekday": (7, 0.0),
+        "month": (12, 1.0),
+        "dayofyear": (366, 1.0),  # safe across leap years
+        "doy": (366, 1.0),
+        "weekofyear": (53, 1.0),  # safer than 52
+        "woy": (53, 1.0),
+        "hour": (24, 0.0),
+        "minute": (60, 0.0),
+        "second": (60, 0.0),
+    }
+
     out = df.copy()
-    common = {7, 12, 24, 60, 365, 366, 52, 53}
-
     for col in calendar_cols:
-        s = out[col].astype(float).to_numpy()
-        mn, mx = np.nanmin(s), np.nanmax(s)
-        P = int(round(mx - mn + 1))
-        if P not in common:
-            raise ValueError(
-                f"Cannot infer cycle for '{col}' (min={mn}, max={mx}, span={P})."
-            )
+        if col not in out.columns:
+            continue
 
-        k = s - (0.0 if mn == 0.0 else 1.0 if mn == 1.0 else mn)
-        a = 2.0 * np.pi * (k / float(P))
+        key = col.lower().replace("_", "")
+        P, offset = cycle_map.get(key, (None, None))
+        if P is None:
+            raise ValueError(f"Unknown calendar column '{col}'. Add it to cycle_map.")
+
+        v = out[col].astype(float).to_numpy()
+        a = 2.0 * np.pi * ((v - offset) / float(P))
         out[f"{col}_sin"] = np.sin(a).astype(np.float32)
         out[f"{col}_cos"] = np.cos(a).astype(np.float32)
 

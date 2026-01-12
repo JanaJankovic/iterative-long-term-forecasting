@@ -145,11 +145,14 @@ def latent_readout_pipeline(
     )
 
     regressor.fit(meta["n_train"], device)
-    forecast = regressor.forecast(meta["n_val_end"], data_cfg.horizon, device)
+    forecast = regressor.forecast(
+        meta["n_val_end"], data_cfg.horizon, device, meta["idx_all"]
+    )
 
     n_train = meta["n_train"]
+    n_val_end = meta["n_val_end"]
     y_pred = forecast["y_pred"]
-    y_true = meta["y_all_unscaled"][n_train : n_train + data_cfg.horizon]
+    y_true = meta["y_all_unscaled"][n_val_end : n_val_end + data_cfg.horizon]
     metrics = compute_metrics(y_true, y_pred)
 
     tag = Path(data_cfg.csv_path).stem
@@ -192,6 +195,7 @@ def latent_readout_pipeline(
     return {
         "name": f"{dt}_{model_tag}",
         "n_train": n_train,
+        "n_val_end": n_val_end,
         "effective_horizon": data_cfg.horizon,
         "X_all": meta["y_all_unscaled"],
         "y_true": y_true,

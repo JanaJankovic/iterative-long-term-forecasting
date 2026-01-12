@@ -118,6 +118,9 @@ def random_search_tabular_latent(
             )
 
         score = float(metrics[metric_key])
+        n_train = int(res.get("n_train", 0))
+        n_val_end = int(res.get("n_val_end", 0))
+
         trial = {
             "trial": i,
             "name": res["name"],
@@ -126,6 +129,8 @@ def random_search_tabular_latent(
             "metrics": metrics,
             "X_all": np.array(X_all).tolist(),
             "y_pred": res["y_pred"].tolist(),
+            "n_train": n_train,  # split index: train ends at n_train-1
+            "n_val_end": n_val_end,  # split index: val ends at n_val_end-1 (test starts at n_val_end)
         }
         trials.append(trial)
 

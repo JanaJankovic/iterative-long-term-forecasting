@@ -271,11 +271,11 @@ class TabularLatentReadout:
 
     def forecast(
         self,
-        n_train_rows: int,
+        start_row: int,  # use n_val_end here
         horizon: int,
         device: torch.device,
+        idx_all: pd.DatetimeIndex,  # pass meta["idx_all"]
     ) -> Dict[str, Any]:
-
         df_raw = pd.read_csv(self.data_cfg.csv_path)
 
         dt = pd.to_datetime(df_raw[self.data_cfg.datetime_col], errors="coerce")
@@ -289,39 +289,34 @@ class TabularLatentReadout:
             name="y",
         ).sort_index()
 
-        feats0 = create_features_from_series(
-            series, lags=self.lags, rolling_windows=self.rolling_windows
-        )
-        train_end_ts = feats0.index[n_train_rows - 1]
-        # engineered y, not raw series
-        y_eng = feats0[self.y_col].to_numpy()
+        # start timestamp = last available engineered row BEFORE rollout
+        start_ts = idx_all[start_row - 1]
 
-        # print("train_end_ts:", train_end_ts)
-        # print("y_eng[t]  :", float(y_eng[n_train_rows - 1]))
-        # print(
-        #     "y_eng[t+1]:",
-        #     float(y_eng[n_train_rows]) if n_train_rows < len(y_eng) else None,
-        # )
-
-        y_hist = series.loc[:train_end_ts].copy()
+        # history up to that timestamp (raw series slice)
+        y_hist = series.loc[:start_ts].copy()
         y_scaler = self.scalers["y_scaler"]
 
         y_pred = []
         y_pred_scaled = []
 
-        for _ in range(horizon):
+        for k in range(horizon):
             feats_t = create_features_from_series(
                 y_hist, lags=self.lags, rolling_windows=self.rolling_windows
             ).iloc[[-1]]
 
             df_t = self._transform(feats_t)
-            X_t = df_t[self.feature_names_in].to_numpy(dtype=np.float32)  # (1,F)
-            Z_t = self.encode_numpy(X_t, device=device)  # (1,L)
+            X_t = df_t[self.feature_names_in].to_numpy(dtype=np.float32)
+            Z_t = self.encode_numpy(X_t, device=device)
 
             y_next_s = float(self.forecaster.predict(Z_t).reshape(-1)[0])
             y_next = float(y_scaler.inverse_transform([[y_next_s]])[0, 0])
 
-            next_ts = y_hist.index[-1] + pd.tseries.frequencies.to_offset(self.freq)
+            # force next timestamp to follow engineered timeline (no weekends drift)
+            next_ts = (
+                idx_all[start_row + k]
+                if (start_row + k) < len(idx_all)
+                else (y_hist.index[-1] + pd.tseries.frequencies.to_offset(self.freq))
+            )
             y_hist.loc[next_ts] = y_next
 
             y_pred_scaled.append(y_next_s)
@@ -330,5 +325,6 @@ class TabularLatentReadout:
         return {
             "y_pred_scaled": np.asarray(y_pred_scaled, dtype=np.float32),
             "y_pred": np.asarray(y_pred, dtype=np.float32),
-            "start_timestamp": train_end_ts,
+            "start_timestamp": start_ts,
+            "start_row": start_row,
         }
